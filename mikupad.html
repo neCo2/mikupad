@@ -1090,6 +1090,7 @@ export async function abortCompletion({ endpoint, endpointAPI, ...options }) {
 	}
 }
 
+
 // Function to parse text/event-stream data and yield JSON objects
 async function* parseEventStream(eventStream) {
 	let buf = '';
@@ -1128,6 +1129,7 @@ async function* parseEventStream(eventStream) {
 				if (data === '[DONE]')
 					break;
 				const json = JSON.parse(data);
+
 				// Both Chrome and Firefox suck at debugging
 				// text/event-stream, so make it easier by logging events
 				console.log('event', json);
@@ -2485,6 +2487,7 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 		const param = [];
 		// TODO grab multi-token strings here and put them in a separate state variable
 		// for phrase bias
+		console.log(logitBias.bias)
 		Object.keys(logitBias.bias).forEach(entry => {
 			// set banned tokens to false, else divide power by 10 to remain within
 			// reasonable range
@@ -2783,6 +2786,78 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 		return permContextPrompt;
 	}, [contextLength, promptText, memoryTokens, authorNoteTokens, authorNoteDepth, assembledWorldInfo, worldInfo.prefix, worldInfo.suffix]);
 
+
+	function checkTokens(stream,phrase) {
+		if (stream.length < phrase.length) {
+			return false;
+		}
+		const streamEnding = stream.slice(-phrase.length)
+		return streamEnding.every(function(token, index) {
+			return token === phrase[index];
+		})
+	}
+	var pausePrediction = false
+	const phraseBiasParser = async (token,bias={}) => {
+		//console.log("phrase bias",token,bias)
+
+		// debugging
+		bias = {
+			" most talented": {
+				ids: [ 749, 12356 ],
+				power: 10,
+				strings: [ " most", " talented" ]
+			}
+		}
+		//console.log(bias)
+		// I need different behaviours for positive and negative bias...
+		// positive: bias first token always, stop when generated,
+		// bias remaining tokens, generate, stop, reset?
+
+		if (!phraseBiasParser.buffer) {
+			// If not defined, create an empty array
+			phraseBiasParser.buffer = [];
+		}
+		phraseBiasParser.buffer.push(token);
+		if (phraseBiasParser.buffer.length > 20) {
+			phraseBiasParser.buffer.shift();
+		}
+		//console.log(phraseBiasParser.buffer)
+		for (const key in bias) {
+			//console.log("for",key, bias[key]);
+			const phrase = bias[key].strings // THIS WILL NOT WORK FOR KOBOLD
+
+			// skip if
+			if(!checkTokens(phraseBiasParser.buffer,phrase))
+				continue
+
+			console.warn("match!")
+			// now I need to somehow efficiently pause generation, trim the prompt, then restart again
+
+			// pause prediction
+			console.log("pause predict",pausePrediction)
+			pausePrediction = true
+			//await new Promise(resolve => setTimeout(resolve, 2000))
+			console.log("pause predict",pausePrediction)
+
+			// setWorldInfo((prevWorldInfo) => {
+			// 	return {
+			// 		...prevWorldInfo,
+			// 		entries: [ ...modEntries ],
+			// 	};
+			// 	});
+
+			setPromptChunks(p => {
+				p.splice(-phrase.length) // this works, but doesn't update the prompt area.
+				//  shit's removed when you reload the page
+				// when you press predict again, the words get removed visually, but the prompt
+				// still contains the removed words?????
+				return p
+			})
+			setTokens(t => t - phrase.length); // not entirely sure this is right
+
+			break
+		}
+	}
 	async function predict(prompt = modifiedPrompt, chunkCount = promptChunks.length) {
 		if (cancel) {
 			cancel?.();
@@ -2795,6 +2870,7 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 			if (cancelled)
 				return;
 		}
+		pausePrediction = false
 
 		const ac = new AbortController();
 		const cancelThis = () => {
@@ -2807,6 +2883,7 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 		};
 		setCancel(() => cancelThis);
 		setLastError(undefined);
+
 
 		try {
 			// sometimes "getTokenCount" can take a while because the server is busy
@@ -2875,6 +2952,22 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 				signal: ac.signal,
 				...(isMikupadEndpoint ? { proxyEndpoint: sessionStorage.proxyEndpoint } : {})
 			})) {
+				// I CAN INTERCEPT SHIT HERE
+				//console.log(chunk)
+				
+				//setPausePrediction(true)
+				// const result = await new Promise(resolve => {
+				// 	resolve( phraseBiasParser(chunk.content,{}) );
+				// });
+				await phraseBiasParser(chunk.content,{})
+
+				console.log("pause?",pausePrediction)
+				if (pausePrediction){
+					console.log("cancelled")
+					cancelThis()
+					//return
+				}
+
 				ac.signal.throwIfAborted();
 				if (chunk.stopping_word)
 					chunk.content = chunk.stopping_word;
