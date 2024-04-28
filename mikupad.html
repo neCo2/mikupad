@@ -2345,6 +2345,7 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 	const [lastError, setLastError] = useState(undefined);
 	const [stoppingStrings, setStoppingStrings] = useSessionState('stoppingStrings', defaultPresets.stoppingStrings);
 	const [stoppingStringsError, setStoppingStringsError] = useState(undefined);
+	const [triggerPredict, setTriggerPredict] = useState(false);
 	const [savedScrollTop, setSavedScrollTop] = useSessionState('scrollTop', defaultPresets.scrollTop);
 	const [modalState, setModalState] = useState({});
 	const [logitBias, setLogitBias] = useSessionState('logitBias', defaultPresets.logitBias);
@@ -2356,6 +2357,8 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 	const [memoryTokens, setMemoryTokens] = useSessionState('memoryTokens', defaultPresets.memoryTokens);
 	const [authorNoteTokens, setAuthorNoteTokens] = useSessionState('authorNoteTokens', defaultPresets.authorNoteTokens);
 	const [authorNoteDepth, setAuthorNoteDepth] = useSessionState('authorNoteDepth', defaultPresets.authorNoteDepth);
+	const [ApausePrediction, setPausePrediction] = useState(false);
+	const [resumePrediction, setResumePrediction] = useState(false);
 
 	const handleLogitBiasInput = (key,value) => {
 		setLogitBiasInput((prevLogitBiasInput) => {
@@ -2668,7 +2671,9 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 		document.body.removeChild(element);
 	};
 
-	const promptText = useMemo(() => joinPrompt(promptChunks), [promptChunks]);
+	// without hooking cancel, this variable doesn't update when extraneous tokens are removed
+	// by phraseBiasParser()
+	const promptText = useMemo(() => joinPrompt(promptChunks), [promptChunks]); // [promptChunks,cancel]);
 
 	// compute separately as I imagine this can get expensive
 	const assembledWorldInfo = useMemo(() => {
@@ -2796,7 +2801,13 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 			return token === phrase[index];
 		})
 	}
-	var pausePrediction = false
+
+	// these variables are needed because for some godforsaken reason, state variables won't
+	// update correctly in a function called by predict()
+	var pausePrediction = false;
+	var predicted = 0;
+	//var resumePrediction = false;
+
 	const phraseBiasParser = async (token,bias={}) => {
 		//console.log("phrase bias",token,bias)
 
@@ -2805,7 +2816,8 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 			" most talented": {
 				ids: [ 749, 12356 ],
 				power: 10,
-				strings: [ " most", " talented" ]
+				strings: [ " most", " talented" ],
+				lastN: 2
 			}
 		}
 		//console.log(bias)
@@ -2825,6 +2837,7 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 		for (const key in bias) {
 			//console.log("for",key, bias[key]);
 			const phrase = bias[key].strings // THIS WILL NOT WORK FOR KOBOLD
+			const lastN = bias[key].lastN
 
 			// skip if
 			if(!checkTokens(phraseBiasParser.buffer,phrase))
@@ -2839,25 +2852,70 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 			//await new Promise(resolve => setTimeout(resolve, 2000))
 			console.log("pause predict",pausePrediction)
 
-			// setWorldInfo((prevWorldInfo) => {
-			// 	return {
-			// 		...prevWorldInfo,
-			// 		entries: [ ...modEntries ],
-			// 	};
-			// 	});
 
-			setPromptChunks(p => {
-				p.splice(-phrase.length) // this works, but doesn't update the prompt area.
-				//  shit's removed when you reload the page
-				// when you press predict again, the words get removed visually, but the prompt
-				// still contains the removed words?????
-				return p
+			// like switchCompletion(i, tok)
+
+			setPromptChunks((p) => {
+				p.splice(-lastN)
+				return [ ...p ]
 			})
-			setTokens(t => t - phrase.length); // not entirely sure this is right
+			const maxPredictTokensBack = maxPredictTokens
+			setMaxPredictTokens(maxPredictTokens-predicted-lastN)
+			setResumePrediction(true)
+			console.log("biasparser",resumePrediction)
+			setTriggerPredict(true);
+			setMaxPredictTokens(maxPredictTokensBack)
+
+
+
+			//setPromptChunks(p => [...p, chunk]);
+			//setPausePrediction(true);
+
+			// remove generated tokens
+			// NEGATIVE BIAS ONLY
+			// setPromptChunks((p) => {
+			// 	p.splice(-lastN)
+			// 	return [ ...p ]
+			// })
+			// state variables are fucked here. promptChunks is updated, but it doesn't force
+			// the usememo promptText to update??? also not for probs, but hovering over it
+			// fixes it.
+			// setTokens(t => t - phrase.length); // not entirely sure this is right
+			// console.log(promptChunks)
+			// console.log(promptText)
+
+			// set bias
+
+
+			
+			// restart prediction by causing an update of the phraseBiasRestart function
+			//pausePrediction = true;
+			
+			
+			// await new Promise(resolve => setTimeout(resolve, 2000)).then(() => {
+			// 	restartPrediction = true
+			// })
+
 
 			break
 		}
 	}
+	function debugSlicePrompt() {
+		setPromptChunks(p => {
+			p.splice(-2)
+			return [ ...p ]
+		})
+		console.log(promptChunks,promptText)		
+	}
+
+	// useEffect(() => {
+	// 	console.log("REDO")
+	// 	if (!restartPrediction)
+	// 		return
+	// 	setRestartPrediction
+	// 	predict
+	// }, [restartPrediction]);
+
 	async function predict(prompt = modifiedPrompt, chunkCount = promptChunks.length) {
 		if (cancel) {
 			cancel?.();
@@ -2871,6 +2929,11 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 				return;
 		}
 		pausePrediction = false
+		console.log(resumePrediction)
+		if (!resumePrediction)
+			predicted = 0; console.log("RESET COUNTER")
+		setResumePrediction(false)
+		//setPausePrediction(false)
 
 		const ac = new AbortController();
 		const cancelThis = () => {
@@ -2889,6 +2952,7 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 			// sometimes "getTokenCount" can take a while because the server is busy
 			// so let's set the predictStartTokens beforehand.
 			setPredictStartTokens(tokens);
+			console.log("maxtok2",maxPredictTokens)
 
 			const tokenCount = await getTokenCount({
 				endpoint,
@@ -2959,12 +3023,18 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 				// const result = await new Promise(resolve => {
 				// 	resolve( phraseBiasParser(chunk.content,{}) );
 				// });
-				await phraseBiasParser(chunk.content,{})
+				predicted++
+				console.log(predicted)
+				phraseBiasParser(chunk.content,{})
 
 				console.log("pause?",pausePrediction)
 				if (pausePrediction){
 					console.log("cancelled")
 					cancelThis()
+					//restartPrediction = true
+					pausePrediction = false
+					//setTriggerPredict(true)
+					console.log("END")
 					//return
 				}
 
@@ -3015,7 +3085,7 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 		return true;
 	}
 
-	const [triggerPredict, setTriggerPredict] = useState(false);
+	
 
 	function undoAndPredict() {
 		if (!undoStack.current.length) return;
@@ -3833,7 +3903,20 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 						<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24"><path d="M6.974 22.957c-10.957-11.421 2.326-20.865 10.384-13.309l-2.464 2.352h9.106v-8.947l-2.232 2.229c-14.794-13.203-31.51 7.051-14.794 17.675z" fill="var(--color-light)"/></svg>
 					</button>
 				</div>
+				
 			</div>
+			<button
+				title=" "
+				disabled=${cancel}
+				onClick=${() => console.log(promptChunks,promptText)}>
+				debug prompt chunks
+			</button>
+			<button
+				title=" "
+				disabled=${cancel}
+				onClick=${() => debugSlicePrompt()}>
+				slice prompt
+			</button>
 			${!!lastError && html`
 				<span className="error-text">${lastError}</span>`}
 		</div>
