@@ -2878,7 +2878,7 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 	var predicted = 0;
 	//var resumePrediction = false;
 
-	const phraseBiasParser = async (token,bias={}) => {
+	const phraseBiasParser = async (token,bias={},predicted=0) => {
 		//console.log("phrase bias",token,bias)
 
 		// debugging
@@ -2909,7 +2909,7 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 			const phrase = bias[key].strings // THIS WILL NOT WORK FOR KOBOLD
 			const lastN = bias[key].lastN
 
-			// skip if
+			// skip if tokens not found
 			if(!checkTokens(phraseBiasParser.buffer,phrase))
 				continue
 
@@ -2919,19 +2919,25 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 			// pause prediction
 			console.log("pause predict",pausePrediction)
 			pausePrediction = true
+
+
 			//await new Promise(resolve => setTimeout(resolve, 2000))
 			console.log("pause predict",pausePrediction)
 
 
-			// like switchCompletion(i, tok)
 
 			setPromptChunks((p) => {
 				p.splice(-lastN)
 				return [ ...p ]
 			})
+			console.log("old",maxPredictTokens,predicted)
 			const maxPredictTokensBack = maxPredictTokens
-			setMaxPredictTokens(maxPredictTokens-predicted-lastN)
+			const result = await new Promise(resolve => {
+				resolve( setMaxPredictTokens(maxPredictTokens-predicted-lastN) );
+			});
+			
 			setResumePrediction(true)
+			console.log("new",maxPredictTokens)
 			console.log("biasparser",resumePrediction)
 			setTriggerPredict(true);
 			setMaxPredictTokens(maxPredictTokensBack)
@@ -2999,10 +3005,20 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 				return;
 		}
 		pausePrediction = false
-		console.log(resumePrediction)
-		if (!resumePrediction)
-			predicted = 0; console.log("RESET COUNTER")
-		setResumePrediction(false)
+		console.log(predicted)
+		// if (false) {
+		// 	predicted = 0;
+		// 	console.log("Resetting counter")
+		// }
+
+		// console.log("predict resumed?",resumePrediction)
+		// if (!resumePrediction) {
+		// 	console.log("PREDICTION MANUALLY STARTED; RESETTING COUNTER")
+		// 	//predicted = 0
+		// 	console.log("RESET COUNTER")
+		// 	setResumePrediction(false)
+		// }
+		
 		//setPausePrediction(false)
 
 		const ac = new AbortController();
@@ -3095,7 +3111,7 @@ export function App({ sessionStorage, useSessionState, isMikupadEndpoint }) {
 				// });
 				predicted++
 				console.log(predicted)
-				phraseBiasParser(chunk.content,{})
+				phraseBiasParser(chunk.content,{},predicted)
 
 				console.log("pause?",pausePrediction)
 				if (pausePrediction){
