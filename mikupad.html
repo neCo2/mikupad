@@ -1126,13 +1126,17 @@ async function* parseEventStream(eventStream) {
 			}
 			// We only emit message-type events for now (and assume JSON)
 			if (data && (type || 'message') === 'message') {
-				if (data === '[DONE]')
+				if (data === '[DONE]') {
+					// This is a hack because we aren't following exactly the spec...
 					break;
+				}
 				const json = JSON.parse(data);
 
 				// Both Chrome and Firefox suck at debugging
 				// text/event-stream, so make it easier by logging events
-				console.log('event', json);
+				if (window.logSSEEvents) {
+					console.log('event', json);
+				}
 				yield json;
 				type = undefined;
 				data = undefined;
@@ -1347,7 +1351,6 @@ async function openaiAphroditeTokenCount({ endpoint, endpointAPIKey, proxyEndpoi
 		const tokens = await res.json();
 		return tokens.length;
 	} catch (e) {
-		reportError(e);
 		return -1;
 	}
 }
@@ -1370,7 +1373,6 @@ async function openaiOobaTokenCount({ endpoint, proxyEndpoint, signal, ...option
 		const { length } = await res.json();
 		return length;
 	} catch (e) {
-		reportError(e);
 		return -1;
 	}
 }
@@ -1394,12 +1396,13 @@ async function openaiTabbyTokenCount({ endpoint, endpointAPIKey, proxyEndpoint, 
 		const tokens = await res.json();
 		return tokens.length;
 	} catch (e) {
-		reportError(e);
 		return -1;
 	}
 }
 
 async function openaiModels({ endpoint, endpointAPIKey, proxyEndpoint, signal, ...options }) {
+	const isTogetherAI = endpoint.toLowerCase().includes("together.xyz");
+
 	const res = await fetch(`${proxyEndpoint ?? endpoint}/v1/models`, {
 		method: 'GET',
 		headers: {
@@ -1411,7 +1414,16 @@ async function openaiModels({ endpoint, endpointAPIKey, proxyEndpoint, signal, .
 	});
 	if (!res.ok)
 		throw new Error(`HTTP ${res.status}`);
-	const { data } = await res.json();
+
+	const response = await res.json();
+	let data;
+
+	if (isTogetherAI) {
+		// TogetherAI returns an array.
+		data = response;
+	} else {
+		data = response.data;
+	}
 	return data.map(item => item.id);
 }
 
@@ -1430,6 +1442,9 @@ function openaiConvertOptions(options, endpoint){
 	if (isOpenAI && options.n_probs > 5) {
 		options.n_probs = 5;
 	}
+	if (isTogetherAI && options.n_probs > 1) {
+		options.n_probs = 1;
+	}
 	if ("dynatemp_range" in options && options.dynatemp_range !== 0) {
 		// oobabooga specific.
 		options.dynamic_temperature = true;
@@ -1439,10 +1454,6 @@ function openaiConvertOptions(options, endpoint){
 	if (!isOpenAI && options.temperature === 0) {
 		// oobabooga specific.
 		options.do_sample = false;
-	}
-	if (isTogetherAI) {
-		// errors 400 without this.
-		delete options.logprobs;
 	}
 	swapOption("n_ctx", "max_context_length");
 	swapOption("n_predict", "max_tokens");
@@ -1493,7 +1504,7 @@ async function openaiOobaAbortCompletion({ endpoint, proxyEndpoint, ...options }
 			},
 		});
 	} catch (e) {
-		reportError(e);
+		// do nothing
 	}
 }
 
